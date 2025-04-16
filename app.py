@@ -8,15 +8,14 @@ import io
 import base64
 import re
 import shutil
-import patoolib
-from patoolib import extract_archive
+
 
 st.set_page_config(page_title="Grade Checker App", layout="wide")
 
-def extract_and_merge(rar_path, output_folder):
+def extract_and_merge(Zip_path, output_folder):
     """
     1) Creates a temporary folder internally (not passed in).
-    2) Extracts 'rar_path' into that temp folder using patool.
+    2) Extracts 'Zip_path' into that temp folder using patool.
     3) Merges .csv/.xlsx/.xls files that share a base code (ignoring underscore suffix).
     4) Saves final merged CSVs to 'output_folder'.
     
@@ -25,7 +24,7 @@ def extract_and_merge(rar_path, output_folder):
       - CSAI330_1.xlsx, CSAI330_2.csv => CSAI330.csv
     
     Args:
-        rar_path (str): The path to the .rar archive.
+        Zip_path (str): The path to the .rar archive.
         output_folder (str): The folder where merged CSVs will be placed.
     
     Returns:
@@ -36,10 +35,11 @@ def extract_and_merge(rar_path, output_folder):
 
     # 1) Create a temporary directory to hold extracted files
     with tempfile.TemporaryDirectory() as temp_dir:
-        st.info(f"Extracting {os.path.basename(rar_path)} into a temporary directory...")
+        st.info(f"Extracting {os.path.basename(Zip_path)} into a temporary directory...")
         
         # 2) Extract using patool (which calls an external tool, e.g. unrar or 7z)
-        extract_archive(rar_path, outdir=temp_dir)
+        with zipfile.ZipFile(Zip_path, 'r') as zip_ref:
+            zip_ref.extractall(temp_dir)
         st.info("Extraction completed. Now merging files by base code...")
 
         # 3) Prepare dictionary: { base_code: [list_of_dataframes] }
