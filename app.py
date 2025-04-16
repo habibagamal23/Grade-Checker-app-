@@ -13,10 +13,10 @@ from patoolib import extract_archive
 
 st.set_page_config(page_title="Grade Checker App", layout="wide")
 
-def extract_and_merge(rar_path, output_folder):
+def merge_files(folder_path, output_folder):
     """
     1) Creates a temporary folder internally (not passed in).
-    2) Extracts 'rar_path' into that temp folder using patool.
+    2) Extracts 'folder_path' into that temp folder using patool.
     3) Merges .csv/.xlsx/.xls files that share a base code (ignoring underscore suffix).
     4) Saves final merged CSVs to 'output_folder'.
     
@@ -35,53 +35,50 @@ def extract_and_merge(rar_path, output_folder):
     os.makedirs(output_folder, exist_ok=True)
 
     # 1) Create a temporary directory to hold extracted files
-    with tempfile.TemporaryDirectory() as temp_dir:
-        st.info(f"Extracting {os.path.basename(rar_path)} into a temporary directory...")
-        
-        # 2) Extract using patool (which calls an external tool, e.g. unrar or 7z)
-        extract_archive(rar_path, outdir=temp_dir)
-        st.info("Extraction completed. Now merging files by base code...")
-
+   
         # 3) Prepare dictionary: { base_code: [list_of_dataframes] }
-        course_data = {}
+    course_data = {}
         
         # Regex: e.g. "CSAI330_1" => "CSAI330"
-        pattern = re.compile(r"^([A-Za-z0-9]+\d+)(?:_.*)?$", re.IGNORECASE)
+    pattern = re.compile(r"^([A-Za-z0-9]+\d+)(?:_.*)?$", re.IGNORECASE)
         
         # Track files processed
-        processed_files = []
         
         # Traverse the extracted folder
-        for root, _, files in os.walk(temp_dir):
-            for filename in files:
-                lower_name = filename.lower()
-                # Only consider .csv/.xlsx/.xls
-                if not (lower_name.endswith(".csv") or 
-                        lower_name.endswith(".xlsx") or 
-                        lower_name.endswith(".xls")):
-                    continue
-                
-                base_name = os.path.splitext(filename)[0]  # e.g. "MATH101_1"
-                m = pattern.match(base_name)
-                if m:
-                    base_code = m.group(1).strip()
-                else:
-                    base_code = base_name  # fallback if no match
+    # Traverse the given folder
+    for root, _, files in os.walk(folder_path):
+        for filename in files:
+            lower_name = filename.lower()
+            # Only consider .csv/.xlsx/.xls
+            if not (
+                lower_name.endswith(".csv") 
+                or lower_name.endswith(".xlsx") 
+                or lower_name.endswith(".xls")
+            ):
+                continue
+            
+            base_name = os.path.splitext(filename)[0]  # e.g. "MATH101_1"
+            match = pattern.match(base_name)
+            if match:
+                base_code = match.group(1).strip()
+            else:
+                base_code = base_name  # fallback if no match
 
-                file_path = os.path.join(root, filename)
-                processed_files.append(f"{filename} → {base_code}")
-                
-                # Read into a DataFrame
-                try:
-                    if lower_name.endswith(".csv"):
-                        df = pd.read_csv(file_path)
-                    else:
-                        df = pd.read_excel(file_path)
-                    
-                    # Accumulate in dictionary
-                    course_data.setdefault(base_code, []).append(df)
-                except Exception as e:
-                    st.warning(f"Couldn't read {filename}: {str(e)}")
+            file_path = os.path.join(root, filename)
+
+            # Read into a DataFrame
+            if lower_name.endswith(".csv"):
+                df = pd.read_csv(file_path)
+            else:
+                df = pd.read_excel(file_path)
+            
+            # Accumulate in dictionary
+            course_data.setdefault(base_code, []).append(df)
+            
+    # Merge each base code's DataFrames and save to 'output_folder'
+    for course, df_list in course_data.items():
+        if not df_list:
+            continue
 
         # 4) Merge each base code's DataFrames and save to 'output_folder'
         merged_files = []
@@ -97,7 +94,7 @@ def extract_and_merge(rar_path, output_folder):
             merged_files.append(f"{course}: {len(df_list)} file(s) merged")
     
     # Temp folder is automatically cleaned up
-    return output_folder, processed_files, merged_files
+    return output_folder
 
 def normalize_grade(grade):
     """Normalize grade format for comparison"""
@@ -529,72 +526,91 @@ tab1, tab2 = st.tabs(["Extract & Merge", "Compare Grades"])
 
 # Tab 1: Extract & Merge
 with tab1:
-    st.header("Extract & Merge Files")
+
+    st.header(" Merge Files")
     
     st.markdown("""
-    This section extracts files from a RAR archive and merges files that share a base code.
+    This section merges files that share a base code.
     
     **Example:**
     - MATH101_1.csv, MATH101_2.xlsx → MATH101.csv
     - CSAI330_1.xlsx, CSAI330_2.csv → CSAI330.csv
     """)
     
-    rar_file = st.file_uploader("Upload RAR file", type=["rar"])
+    # File upload section
+    st.subheader("Upload Files to Merge")
+    uploaded_files = st.file_uploader("Select files to merge (.csv, .xlsx, .xls)", 
+                                      type=["csv", "xlsx", "xls"], 
+                                      accept_multiple_files=True, 
+                                      key="merge_uploader")
     
-    if rar_file:
-        st.success(f"✅ {rar_file.name} uploaded")
+    if uploaded_files:
+        st.success(f"✅ {len(uploaded_files)} files uploaded")
+        file_names = [file.name for file in uploaded_files]
+        st.write("Uploaded files:", ", ".join(file_names))
         
-        if st.button("Extract & Merge Files", key="extract_btn"):
-            # Save uploaded file to a temporary file
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.rar') as tmp_file:
-                tmp_file.write(rar_file.getvalue())
-                tmp_file_path = tmp_file.name
-            
-            # Create output directory
-            output_dir = tempfile.mkdtemp()
-            
-            with st.spinner("Extracting and merging files..."):
+        # Create temporary directory for processing
+        temp_input_dir = tempfile.mkdtemp()
+        temp_output_dir = tempfile.mkdtemp()
+        
+        # Save uploaded files to temporary directory
+        for uploaded_file in uploaded_files:
+            file_path = os.path.join(temp_input_dir, uploaded_file.name)
+            with open(file_path, "wb") as f:
+                f.write(uploaded_file.getvalue())
+        
+        # Add a button to merge files
+        if st.button("Merge Files", type="primary"):
+            with st.spinner("Merging files..."):
                 try:
-                    # Call extract_and_merge function
-                    output_folder, processed_files, merged_files = extract_and_merge(tmp_file_path, output_dir)
+                    # Call the merge function
+                    output_folder = merge_files(temp_input_dir, temp_output_dir)
                     
-                    # Cleanup
-                    os.unlink(tmp_file_path)
+                    # Get merged files
+                    merged_files = [f for f in glob.glob(os.path.join(output_folder, "*.csv"))]
                     
-                    st.success(f"Processing complete! {len(merged_files)} merged files created.")
-                    
-                    # Show processed files
-                    with st.expander("Files processed"):
-                        for file in processed_files:
-                            st.text(file)
-                    
-                    # Show merged files
-                    with st.expander("Files merged"):
-                        for file in merged_files:
-                            st.text(file)
-                    
-                    # Create a download link for all merged files
-                    merged_files_zip = create_zip_file(output_folder)
-                    st.download_button(
-                        label="Download All Merged Files",
-                        data=merged_files_zip,
-                        file_name="merged_files.zip",
-                        mime="application/zip"
-                    )
-                    
-                    # Store the output folder path in session state
-                    st.session_state.merged_folder = output_folder
-                    st.session_state.has_merged_files = True
-                    
-                    # Add a button to go to the next tab
-                    st.success("Files are ready! Click the 'Compare Grades' tab to continue.")
-                    
+                    if merged_files:
+                        st.session_state.merged_folder = output_folder
+                        st.session_state.has_merged_files = True
+                        
+                        # Display success message
+                        st.success(f"✅ Successfully merged into {len(merged_files)} files")
+                        
+                        # Create a download section for each merged file
+                        st.subheader("Download Merged Files")
+                        
+                        for file_path in merged_files:
+                            file_name = os.path.basename(file_path)
+                            with open(file_path, "rb") as f:
+                                file_data = f.read()
+                            
+                            st.download_button(
+                                label=f"Download {file_name}",
+                                data=file_data,
+                                file_name=file_name,
+                                mime="text/csv",
+                                key=f"download_{file_name}"
+                            )
+                        
+                        # Create a ZIP file with all merged files
+                        results_zip = create_zip_file(output_folder)
+                        st.download_button(
+                            label="Download All Merged Files (ZIP)",
+                            data=results_zip,
+                            file_name="merged_files.zip",
+                            mime="application/zip"
+                        )
+                        
+                        # Add option to use these files for comparison
+                        st.info("These merged files can be used in the 'Compare Grades' tab.")
+                        if st.button("Go to Compare Grades Tab"):
+                            st.session_state.active_tab = "Compare Grades"
+                    else:
+                        st.warning("No files were merged. Please check your input files.")
                 except Exception as e:
-                    st.error(f"Error during extraction: {str(e)}")
-                    if os.path.exists(tmp_file_path):
-                        os.unlink(tmp_file_path)
-                    if os.path.exists(output_dir):
-                        shutil.rmtree(output_dir)
+                    st.error(f"Error merging files: {str(e)}")
+    else:
+        st.info("Upload files to begin merging process.")
 
 # Tab 2: Compare Grades
 with tab2:
