@@ -8,14 +8,15 @@ import io
 import base64
 import re
 import shutil
-
+import patoolib
+from patoolib import extract_archive
 
 st.set_page_config(page_title="Grade Checker App", layout="wide")
 
-def extract_and_merge(Zip_path, output_folder):
+def extract_and_merge(rar_path, output_folder):
     """
     1) Creates a temporary folder internally (not passed in).
-    2) Extracts 'Zip_path' into that temp folder using patool.
+    2) Extracts 'rar_path' into that temp folder using patool.
     3) Merges .csv/.xlsx/.xls files that share a base code (ignoring underscore suffix).
     4) Saves final merged CSVs to 'output_folder'.
     
@@ -24,7 +25,7 @@ def extract_and_merge(Zip_path, output_folder):
       - CSAI330_1.xlsx, CSAI330_2.csv => CSAI330.csv
     
     Args:
-        Zip_path (str): The path to the .rar archive.
+        rar_path (str): The path to the .rar archive.
         output_folder (str): The folder where merged CSVs will be placed.
     
     Returns:
@@ -35,11 +36,183 @@ def extract_and_merge(Zip_path, output_folder):
 
     # 1) Create a temporary directory to hold extracted files
     with tempfile.TemporaryDirectory() as temp_dir:
-        st.info(f"Extracting {os.path.basename(Zip_path)} into a temporary directory...")
+        st.info(f"Extracting {os.path.basename(rar_path)} into a temporary directory...")
         
         # 2) Extract using patool (which calls an external tool, e.g. unrar or 7z)
-        with zipfile.ZipFile(Zip_path, 'r') as zip_ref:
-            zip_ref.extractall(temp_dir)
+        extract_archive(rar_path, outdir=temp_dir)
+        st.info("Extraction completed. Now merging files by base code...")
+
+        # 3) Prepare dictionary: { base_code: [list_of_dataframes] }
+        course_data = {}
+        
+        # Regex: e.g. "CSAI330_1" => "CSAI330"
+        pattern = re.compile(r"^([A-Za-z0-9]+\d+)(?:_.*)?$", re.IGNORECASE)
+        
+        # Track files processed
+        processed_files = []
+        
+        # Traverse the extracted folder
+        for root, _, files in os.walk(temp_dir):
+            for filename in files:
+                lower_name = filename.lower()
+                # Only consider .csv/.xlsx/.xls
+                if not (lower_name.endswith(".csv") or 
+                        lower_name.endswith(".xlsx") or 
+                        lower_name.endswith(".xls")):
+                    continue
+                
+                base_name = os.path.splitext(filename)[0]  # e.g. "MATH101_1"
+                m = pattern.match(base_name)
+                if m:
+                    base_code = m.group(1).strip()
+                else:
+                    base_code = base_name  # fallback if no match
+
+                file_path = os.path.join(root, filename)
+                processed_files.append(f"{filename} → {base_code}")
+                
+                # Read into a DataFrame
+                try:
+                    if lower_name.endswith(".csv"):
+                        df = pd.read_csv(file_path)
+                    else:
+                        df = pd.read_excel(file_path)
+                    
+                    # Accumulate in dictionary
+                    course_data.setdefault(base_code, []).append(df)
+                except Exception as e:
+                    st.warning(f"Couldn't read {filename}: {str(e)}")
+
+        # 4) Merge each base code's DataFrames and save to 'output_folder'
+        merged_files = []
+        for course, df_list in course_data.items():
+            if not df_list:
+                continue
+            merged_df = pd.concat(df_list, ignore_index=True)
+            
+            out_name = course + ".csv"
+            out_path = os.path.join(output_folder, out_name)
+            merged_df.to_csv(out_path, index=False)
+            
+            merged_files.append(f"{course}: {len(df_list)} file(s) merged")
+    
+    # Temp folder is automatically cleaned up
+    return output_folder, processed_files, merged_files
+
+
+def extract_and_merge(rar_path, output_folder):
+    """
+    1) Creates a temporary folder internally (not passed in).
+    2) Extracts 'rar_path' into that temp folder using patool.
+    3) Merges .csv/.xlsx/.xls files that share a base code (ignoring underscore suffix).
+    4) Saves final merged CSVs to 'output_folder'.
+    
+    Example of merging:
+      - MATH101_1.csv, MATH101_2.xlsx => MATH101.csv
+      - CSAI330_1.xlsx, CSAI330_2.csv => CSAI330.csv
+    
+    Args:
+        rar_path (str): The path to the .rar archive.
+        output_folder (str): The folder where merged CSVs will be placed.
+    
+    Returns:
+        str: The output_folder path (with final merged CSVs inside).
+    """
+    # Ensure final output folder exists
+    os.makedirs(output_folder, exist_ok=True)
+
+    # 1) Create a temporary directory to hold extracted files
+    with tempfile.TemporaryDirectory() as temp_dir:
+        st.info(f"Extracting {os.path.basename(rar_path)} into a temporary directory...")
+        
+        # 2) Extract using patool (which calls an external tool, e.g. unrar or 7z)
+        extract_archive(rar_path, outdir=temp_dir)
+        st.info("Extraction completed. Now merging files by base code...")
+
+        # 3) Prepare dictionary: { base_code: [list_of_dataframes] }
+        course_data = {}
+        
+        # Regex: e.g. "CSAI330_1" => "CSAI330"
+        pattern = re.compile(r"^([A-Za-z0-9]+\d+)(?:_.*)?$", re.IGNORECASE)
+        
+        # Track files processed
+        processed_files = []
+        
+        # Traverse the extracted folder
+        for root, _, files in os.walk(temp_dir):
+            for filename in files:
+                lower_name = filename.lower()
+                # Only consider .csv/.xlsx/.xls
+                if not (lower_name.endswith(".csv") or 
+                        lower_name.endswith(".xlsx") or 
+                        lower_name.endswith(".xls")):
+                    continue
+                
+                base_name = os.path.splitext(filename)[0]  # e.g. "MATH101_1"
+                m = pattern.match(base_name)
+                if m:
+                    base_code = m.group(1).strip()
+                else:
+                    base_code = base_name  # fallback if no match
+
+                file_path = os.path.join(root, filename)
+                processed_files.append(f"{filename} → {base_code}")
+                
+                # Read into a DataFrame
+                try:
+                    if lower_name.endswith(".csv"):
+                        df = pd.read_csv(file_path)
+                    else:
+                        df = pd.read_excel(file_path)
+                    
+                    # Accumulate in dictionary
+                    course_data.setdefault(base_code, []).append(df)
+                except Exception as e:
+                    st.warning(f"Couldn't read {filename}: {str(e)}")
+
+        # 4) Merge each base code's DataFrames and save to 'output_folder'
+        merged_files = []
+        for course, df_list in course_data.items():
+            if not df_list:
+                continue
+            merged_df = pd.concat(df_list, ignore_index=True)
+            
+            out_name = course + ".csv"
+            out_path = os.path.join(output_folder, out_name)
+            merged_df.to_csv(out_path, index=False)
+            
+            merged_files.append(f"{course}: {len(df_list)} file(s) merged")
+    
+    # Temp folder is automatically cleaned up
+    return output_folder, processed_files, merged_files
+
+def extract_and_merge(rar_path, output_folder):
+    """
+    1) Creates a temporary folder internally (not passed in).
+    2) Extracts 'rar_path' into that temp folder using patool.
+    3) Merges .csv/.xlsx/.xls files that share a base code (ignoring underscore suffix).
+    4) Saves final merged CSVs to 'output_folder'.
+    
+    Example of merging:
+      - MATH101_1.csv, MATH101_2.xlsx => MATH101.csv
+      - CSAI330_1.xlsx, CSAI330_2.csv => CSAI330.csv
+    
+    Args:
+        rar_path (str): The path to the .rar archive.
+        output_folder (str): The folder where merged CSVs will be placed.
+    
+    Returns:
+        str: The output_folder path (with final merged CSVs inside).
+    """
+    # Ensure final output folder exists
+    os.makedirs(output_folder, exist_ok=True)
+
+    # 1) Create a temporary directory to hold extracted files
+    with tempfile.TemporaryDirectory() as temp_dir:
+        st.info(f"Extracting {os.path.basename(rar_path)} into a temporary directory...")
+        
+        # 2) Extract using patool (which calls an external tool, e.g. unrar or 7z)
+        extract_archive(rar_path, outdir=temp_dir)
         st.info("Extraction completed. Now merging files by base code...")
 
         # 3) Prepare dictionary: { base_code: [list_of_dataframes] }
